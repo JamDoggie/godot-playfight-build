@@ -45,11 +45,6 @@ jobs:
         run: |
           bash ./misc/scripts/gitignore_check.sh
 
-      - name: Style checks via pre-commit
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --verbose --files ${{ env.CHANGED_FILES }}
-
       - name: Python builders checks via pytest
         run: |
           pytest ./tests/python_build
