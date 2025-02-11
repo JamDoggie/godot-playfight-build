@@ -113,7 +113,7 @@ public:
 	void add_path(const String &p_pkg_path, const String &p_path, uint64_t p_ofs, uint64_t p_size, const uint8_t *p_md5, PackSource *p_src, bool p_replace_files, bool p_encrypted = false); // for PackSource
 
 	void set_disabled(bool p_disabled) { disabled = p_disabled; }
-	_FORCE_INLINE_ bool is_disabled() const { return disabled; }
+	_FORCE_INLINE_ bool is_disabled() const { return false; } // { return disabled; }
 
 	static PackedData *get_singleton() { return singleton; }
 	Error add_pack(const String &p_path, bool p_replace_files, uint64_t p_offset);

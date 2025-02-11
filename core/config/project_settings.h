@@ -32,6 +32,7 @@
 #define PROJECT_SETTINGS_H
 
 #include "core/object/class_db.h"
+#include "core/io/dir_access.h"
 
 template <typename T>
 class TypedArray;
@@ -86,6 +87,9 @@ protected:
 		}
 	};
 
+
+	DirAccess::CreateFunc original_resource_access = nullptr;
+
 	int last_order = NO_BUILTIN_ORDER_BASE;
 	int last_builtin_order = 0;
 	uint64_t last_save_time = 0;
@@ -118,6 +122,8 @@ protected:
 
 	void _queue_changed();
 	void _emit_changed();
+
+	void set_dir_access(bool p_access_resources);
 
 	static ProjectSettings *singleton;
 

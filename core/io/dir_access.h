@@ -48,10 +48,11 @@ public:
 	};
 
 	typedef Ref<DirAccess> (*CreateFunc)();
+	static CreateFunc create_func[ACCESS_MAX]; ///< set this to instance a filesystem object (I made this public for the PF level editor)
 
 private:
 	AccessType _access_type = ACCESS_FILESYSTEM;
-	static CreateFunc create_func[ACCESS_MAX]; ///< set this to instance a filesystem object
+	
 	static Ref<DirAccess> _open(const String &p_path);
 
 	Error _copy_dir(Ref<DirAccess> &p_target_da, const String &p_to, int p_chmod_flags, bool p_copy_links);
