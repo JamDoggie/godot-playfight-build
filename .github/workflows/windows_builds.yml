@@ -38,6 +38,13 @@ jobs:
             sconsflags: debug_symbols=no tests=yes module_mono_enabled=yes
             bin: "./bin/godot.windows.template_release.x86_64.mono.console.exe"
 
+          - name: Template (target=template_debug)
+            cache-name: windows-template
+            target: template_debug
+            tests: true
+            sconsflags: debug_symbols=yes tests=yes module_mono_enabled=yes
+            bin: "./bin/godot.windows.template_debug.x86_64.mono.console.exe"
+
     steps:
       - uses: actions/checkout@v4
         with:
