@@ -117,7 +117,7 @@ public:
 	HashSet<String> get_file_paths() const;
 
 	void set_disabled(bool p_disabled) { disabled = p_disabled; }
-	_FORCE_INLINE_ bool is_disabled() const { return disabled; }
+	_FORCE_INLINE_ bool is_disabled() const { return false; } // { return disabled; }
 
 	static PackedData *get_singleton() { return singleton; }
 	Error add_pack(const String &p_path, bool p_replace_files, uint64_t p_offset);
