@@ -1418,7 +1418,7 @@ void ProjectSettings::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("globalize_path", "path"), &ProjectSettings::globalize_path);
 	ClassDB::bind_method(D_METHOD("save"), &ProjectSettings::save);
 	ClassDB::bind_method(D_METHOD("load_resource_pack", "pack", "replace_files", "offset"), &ProjectSettings::load_resource_pack, DEFVAL(true), DEFVAL(0));
-	ClassDB::bind_method(D_METHOD("set_dir_access", "access_resources"), &ProjectSettings::set_dir_access);
+	ClassDB::bind_method(D_METHOD("set_dir_access", "p_use_pck_file"), &ProjectSettings::set_dir_access);
 
 	ClassDB::bind_method(D_METHOD("save_custom", "file"), &ProjectSettings::_save_custom_bnd);
 
