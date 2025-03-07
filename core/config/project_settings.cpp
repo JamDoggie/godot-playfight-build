@@ -472,6 +472,23 @@ void ProjectSettings::_emit_changed() {
 	emit_signal("settings_changed");
 }
 
+void ProjectSettings::set_dir_access(bool p_use_pck_file) {
+	if (original_resource_access == nullptr)
+
+	{
+		original_resource_access = DirAccess::create_func[DirAccess::ACCESS_RESOURCES];
+	}
+
+	ERR_FAIL_NULL_MSG(original_resource_access, "Could not get original DirAccess for ACCESS_RESOURCES.");
+
+	if (p_use_pck_file) {
+		DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+
+	} else {
+		DirAccess::create_func[DirAccess::ACCESS_RESOURCES] = original_resource_access;
+	}
+}
+
 bool ProjectSettings::load_resource_pack(const String &p_pack, bool p_replace_files, int p_offset) {
 	return ProjectSettings::_load_resource_pack(p_pack, p_replace_files, p_offset, false);
 }
@@ -491,7 +508,11 @@ bool ProjectSettings::_load_resource_pack(const String &p_pack, bool p_replace_f
 		// the game is running without a main pack, like in the editor or on Android.
 		PackedData::get_singleton()->add_pack_source(memnew(PackedSourceDirectory));
 		PackedData::get_singleton()->add_pack("res://", false, 0);
-		DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+
+		if (!Engine::get_singleton()->is_editor_hint()) {
+			DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+		}
+
 		using_datapack = true;
 	}
 
@@ -510,7 +531,10 @@ bool ProjectSettings::_load_resource_pack(const String &p_pack, bool p_replace_f
 
 	// If the data pack was found, all directory access will be from here.
 	if (!using_datapack) {
-		DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+		if (!Engine::get_singleton()->is_editor_hint()) {
+			DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+		}
+
 		using_datapack = true;
 	}
 
@@ -1420,6 +1444,7 @@ void ProjectSettings::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("globalize_path", "path"), &ProjectSettings::globalize_path);
 	ClassDB::bind_method(D_METHOD("save"), &ProjectSettings::save);
 	ClassDB::bind_method(D_METHOD("load_resource_pack", "pack", "replace_files", "offset"), &ProjectSettings::load_resource_pack, DEFVAL(true), DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("set_dir_access", "access_resources"), &ProjectSettings::set_dir_access);
 
 	ClassDB::bind_method(D_METHOD("save_custom", "file"), &ProjectSettings::_save_custom_bnd);
 
