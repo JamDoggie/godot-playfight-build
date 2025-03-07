@@ -32,6 +32,7 @@
 #define PROJECT_SETTINGS_H
 
 #include "core/object/class_db.h"
+#include "core/io/dir_access.h"
 
 template <typename T>
 class TypedArray;
