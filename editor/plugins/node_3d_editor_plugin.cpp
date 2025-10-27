@@ -1538,7 +1538,7 @@ Transform3D Node3DEditorViewport::_compute_transform(TransformMode p_mode, const
 				r.basis = Basis(axis.normalized(), p_extra) * p_original_local.basis;
 				r.origin = p_original_local.origin;
 			} else {
-				Basis local = p_original.basis * p_original_local.basis.inverse();
+				Basis local = p_original.basis * p_original_local.basis.inverse(); // equal to parent global transform
 				Vector3 axis = local.xform_inv(p_motion);
 				r.basis = local * Basis(axis.normalized(), p_extra) * p_original_local.basis;
 				r.origin = Basis(p_motion, p_extra).xform(p_original.origin - _edit.center) + _edit.center;
