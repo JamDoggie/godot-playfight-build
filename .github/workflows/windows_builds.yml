@@ -32,7 +32,7 @@ jobs:
               vsproj=yes
               vsproj_gen_only=no
               module_mono_enabled=yes
-            bin: ./bin/godot.windows.editor.x86_64.exe
+            bin: ./bin/godot.windows.editor.mono.x86_64.exe
             compiler: msvc
 
           - name: Editor w/ clang-cl (target=editor, use_llvm=yes)
@@ -42,7 +42,7 @@ jobs:
               windows_subsystem=console
               use_llvm=yes
               module_mono_enabled=yes
-            bin: ./bin/godot.windows.editor.x86_64.llvm.exe
+            bin: ./bin/godot.windows.editor.x86_64.mono.llvm.exe
             compiler: clang
 
           - name: Template (target=template_release)
@@ -57,7 +57,7 @@ jobs:
             # MinGW takes MUCH longer to compile; save time by only targeting Template.
             target: template_release
             scons-flags: use_mingw=yes module_mono_enabled=yes
-            bin: ./bin/godot.windows.template_release.x86_64.console.exe
+            bin: ./bin/godot.windows.template_release.x86_64.mono.console.exe
             compiler: gcc
 
     steps:
