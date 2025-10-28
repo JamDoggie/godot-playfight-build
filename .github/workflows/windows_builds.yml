@@ -32,7 +32,7 @@ jobs:
               vsproj=yes
               vsproj_gen_only=no
               module_mono_enabled=yes
-            bin: ./bin/godot.windows.editor.mono.x86_64.exe
+            bin: ./bin/godot.windows.editor.x86_64.mono.exe
             compiler: msvc
 
           - name: Editor w/ clang-cl (target=editor, use_llvm=yes)
