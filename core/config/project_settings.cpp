@@ -575,7 +575,6 @@ void ProjectSettings::_emit_changed() {
 
 void ProjectSettings::set_dir_access(bool p_use_pck_file) {
 	if (original_resource_access == nullptr)
-
 	{
 		original_resource_access = DirAccess::create_func[DirAccess::ACCESS_RESOURCES];
 	}

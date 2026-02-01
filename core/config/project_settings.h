@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/io/dir_access.h"
 #include "core/object/object.h"
 #include "core/templates/rb_map.h"
 
@@ -93,6 +94,8 @@ protected:
 		}
 	};
 
+	DirAccess::CreateFunc original_resource_access = nullptr;
+
 	int last_order = NO_BUILTIN_ORDER_BASE;
 	int last_builtin_order = 0;
 	uint64_t last_save_time = 0;
@@ -125,6 +128,8 @@ protected:
 
 	void _queue_changed(const StringName &p_name);
 	void _emit_changed();
+
+	void set_dir_access(bool p_access_resources);
 
 	static inline ProjectSettings *singleton = nullptr;
 
