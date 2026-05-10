@@ -134,6 +134,14 @@ public:
 	JPH::Body *add_object(const JoltObject3D &p_object, const JPH::BodyCreationSettings &p_settings, bool p_sleeping = false);
 	JPH::Body *add_object(const JoltObject3D &p_object, const JPH::SoftBodyCreationSettings &p_settings, bool p_sleeping = false);
 	void remove_object(const JPH::BodyID &p_jolt_id);
+
+	// PlayFight: remove a body from the broad phase but keep it in BodyManager.
+	// Used for rollback bodies whose slot must remain reserved across disable
+	// cycles so Jolt's auto-allocator can't reclaim it. The body remains alive
+	// in mBodies; subsequent add_object with the same pending hint reuses it.
+	// Final destruction happens in JoltPhysicsServer3D::free_body via destroy_body_in_manager.
+	void remove_object_keep_alive(const JPH::BodyID &p_jolt_id);
+	void destroy_body_in_manager(const JPH::BodyID &p_jolt_id);
 	void flush_pending_objects();
 
 	void set_is_object_sleeping(const JPH::BodyID &p_jolt_id, bool p_enable);

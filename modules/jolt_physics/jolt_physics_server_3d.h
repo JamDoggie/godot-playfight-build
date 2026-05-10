@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/templates/hash_set.h"
 #include "core/templates/rid_owner.h"
 #include "servers/physics_3d/physics_server_3d.h"
 
@@ -54,6 +55,13 @@ class JoltPhysicsServer3D final : public PhysicsServer3D {
 	mutable RID_PtrOwner<JoltJoint3D, true> joint_owner;
 
 	HashSet<JoltSpace3D *> active_spaces;
+
+	// PlayFight: set of Jolt body indices that participate in cross-machine
+	// rollback. Populated by `body_set_pending_jolt_id`; consulted by the
+	// StateRecorder filter so the wire blob only carries bodies whose IDs are
+	// guaranteed identical on server and client. Also drives contact filtering
+	// (a contact is saved only if both bodies are in this set).
+	HashSet<uint32_t> rollback_body_ids;
 
 	JoltJobSystem *job_system = nullptr;
 
@@ -117,7 +125,7 @@ public:
 	};
 
 private:
-	static void _bind_methods() {}
+	static void _bind_methods();
 
 public:
 	explicit JoltPhysicsServer3D(bool p_on_separate_thread);
@@ -419,6 +427,34 @@ public:
 	virtual void finish() override;
 
 	virtual void step(real_t p_step) override;
+
+	// PlayFight: imperatively step a single physics space. Used by the client
+	// prediction system to re-simulate physics during rollback. Bypasses the
+	// `active` flag and does not flush queries / transform notifications.
+	void space_step(RID p_space, double p_delta);
+
+	// PlayFight: full-physics-state save/restore via Jolt's StateRecorder. The
+	// save filter skips static bodies (their state never changes, so shipping
+	// them is wasted bandwidth and restoring them is wasted work).
+	PackedByteArray space_save_state(RID p_space);
+	bool space_restore_state(RID p_space, const PackedByteArray &p_state);
+
+	// PlayFight: cross-machine body-ID synchronization. The server allocates a
+	// stable Jolt BodyID for every body that needs to participate in rollback,
+	// replicates it to clients, and clients pin the same ID to their local body
+	// before that body enters its physics space (otherwise the explicit-ID
+	// creation path can't be used and the operation will silently no-op).
+	// `body_set_pending_jolt_id` must be called between body RID creation and
+	// the body entering a space; once the body is added to a space the hint is
+	// consumed and re-setting it does nothing useful.
+	void body_set_pending_jolt_id(RID p_body, uint64_t p_jolt_id);
+	uint64_t body_get_jolt_id(RID p_body) const;
+
+	// PlayFight: diagnostics for the rollback set. Lets the game-side code
+	// confirm that `body_set_pending_jolt_id` calls actually landed on this
+	// instance (not a different JoltPhysicsServer3D), and inspect membership.
+	int rollback_set_size() const { return (int)rollback_body_ids.size(); }
+	bool rollback_set_has(uint64_t p_jolt_id) const { return rollback_body_ids.has((uint32_t)p_jolt_id); }
 
 	virtual void sync() override;
 	virtual void end_sync() override;

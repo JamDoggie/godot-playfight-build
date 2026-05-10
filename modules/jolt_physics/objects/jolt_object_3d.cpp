@@ -41,7 +41,23 @@ void JoltObject3D::_remove_from_space() {
 		return;
 	}
 
-	space->remove_object(jolt_body->GetID());
+	// PlayFight diagnostic: trace removals for bodies in the rollback range so
+	// we can see what is yanking them back out of the space after `_add_to_space`
+	// succeeded. Filter by ID range to avoid log spam from level statics.
+	const uint32_t live_id = jolt_body->GetID().GetIndexAndSequenceNumber();
+	if (live_id >= 1024 && live_id < 0x800000) {
+		print_line(vformat("[remove_from_space] live=%d keep_alive=%d", (int)live_id, (int)has_pending_jolt_id()));
+	}
+
+	if (has_pending_jolt_id()) {
+		// PlayFight: rollback body. Keep its slot reserved in BodyManager so
+		// Jolt's auto-allocator can't grab it before the next disable/enable
+		// cycle re-adds it. Final destruction is via free_body/free_soft_body.
+		space->remove_object_keep_alive(jolt_body->GetID());
+		kept_alive_in_space = space;
+	} else {
+		space->remove_object(jolt_body->GetID());
+	}
 	jolt_body = nullptr;
 }
 
@@ -81,6 +97,17 @@ Object *JoltObject3D::get_instance() const {
 }
 
 void JoltObject3D::set_space(JoltSpace3D *p_space) {
+	// PlayFight diagnostic: trace set_space transitions, but only for bodies
+	// that have a pending rollback ID hint set (otherwise level statics flood
+	// the log). Bodies in our rollback set always have a pending hint at the
+	// moment set_space(real_space) is called the first time.
+	if (has_pending_jolt_id()) {
+		print_line(vformat("[set_space] pending=%d cur_space_set=%d new_space_set=%d",
+				(int)pending_jolt_id.GetIndexAndSequenceNumber(),
+				space != nullptr ? 1 : 0,
+				p_space != nullptr ? 1 : 0));
+	}
+
 	if (space == p_space) {
 		return;
 	}
@@ -95,6 +122,10 @@ void JoltObject3D::set_space(JoltSpace3D *p_space) {
 
 	if (space != nullptr) {
 		_add_to_space();
+		// PlayFight: body is back in an active space; clear the kept-alive
+		// pointer (only meaningful when the body is in BodyManager but not
+		// in any active space).
+		kept_alive_in_space = nullptr;
 	}
 
 	_space_changed();

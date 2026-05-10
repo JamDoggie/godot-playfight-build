@@ -71,6 +71,17 @@ protected:
 	uint32_t collision_layer = 1;
 	uint32_t collision_mask = 1;
 
+	// PlayFight: cross-machine ID-sync hint. See accessors below.
+	JPH::BodyID pending_jolt_id;
+
+	// PlayFight: when a rollback body is removed from its active space we
+	// keep its underlying Jolt body alive in the space's BodyManager (so
+	// Jolt's auto-allocator can't reclaim the slot). This pointer remembers
+	// which space currently owns the kept-alive body, so free_body can find
+	// it later for final destruction. Non-null only while the body is "alive
+	// in BodyManager but not in any active space".
+	JoltSpace3D *kept_alive_in_space = nullptr;
+
 	ObjectType object_type = OBJECT_TYPE_INVALID;
 
 	bool pickable = false;
@@ -127,6 +138,19 @@ public:
 	JoltSpace3D *get_space() const { return space; }
 	void set_space(JoltSpace3D *p_space);
 	bool in_space() const { return space != nullptr && jolt_body != nullptr; }
+
+	// PlayFight: cross-machine ID sync. When set, the next time this object is
+	// added to a space the body is created with the specified Jolt BodyID via
+	// `BodyInterface::CreateBodyWithID` instead of an auto-allocated one. The
+	// hint is consumed (cleared) on use. Setting an invalid (default-constructed)
+	// BodyID disables the hint.
+	void set_pending_jolt_id(JPH::BodyID p_id) { pending_jolt_id = p_id; }
+	JPH::BodyID get_pending_jolt_id() const { return pending_jolt_id; }
+	bool has_pending_jolt_id() const { return !pending_jolt_id.IsInvalid(); }
+	void clear_pending_jolt_id() { pending_jolt_id = JPH::BodyID(); }
+
+	JoltSpace3D *get_kept_alive_space() const { return kept_alive_in_space; }
+	void set_kept_alive_space(JoltSpace3D *p_space) { kept_alive_in_space = p_space; }
 
 	uint32_t get_collision_layer() const { return collision_layer; }
 	void set_collision_layer(uint32_t p_layer);

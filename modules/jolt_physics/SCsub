@@ -156,6 +156,12 @@ if env.editor_build:
 if env["precision"] == "double":
     env_jolt.Append(CPPDEFINES=["JPH_DOUBLE_PRECISION"])
 
+# PlayFight: opt into Jolt's cross-platform deterministic mode. Required for
+# rollback netcode where peers may run different binaries (e.g., Linux server,
+# Windows clients). Costs ~8% perf vs. non-deterministic mode but is essential
+# for the multiplayer physics-prediction system.
+env_jolt.Append(CPPDEFINES=["JPH_CROSS_PLATFORM_DETERMINISTIC"])
+
 env_thirdparty = env_jolt.Clone()
 env_thirdparty.disable_warnings()
 

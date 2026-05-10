@@ -396,7 +396,43 @@ void JoltSpace3D::set_default_area(JoltArea3D *p_area) {
 
 JPH::Body *JoltSpace3D::add_object(const JoltObject3D &p_object, const JPH::BodyCreationSettings &p_settings, bool p_sleeping) {
 	JPH::BodyInterface &body_iface = get_body_iface();
-	JPH::Body *jolt_body = body_iface.CreateBody(p_settings);
+
+	// PlayFight: if the object has a pre-assigned Jolt BodyID (set by the
+	// rollback ID-sync layer to keep server and client body IDs aligned), use
+	// the explicit-ID creation path. Otherwise fall through to auto-allocation.
+	JPH::Body *jolt_body = nullptr;
+	const bool had_pending = p_object.has_pending_jolt_id();
+	const uint32_t pending_id = had_pending ? p_object.get_pending_jolt_id().GetIndexAndSequenceNumber() : 0xFFFFFFFFu;
+	const bool slot_already_added = had_pending ? body_iface.IsAdded(p_object.get_pending_jolt_id()) : false;
+	bool reused = false;
+	if (had_pending) {
+		// PlayFight: rollback bodies survive disable/enable cycles. On the very
+		// first add we use CreateBodyWithID; subsequent adds find the body still
+		// alive in BodyManager (we kept its slot reserved on the previous
+		// removal) and just re-attach it to the broad phase via pending_objects.
+		const JPH::BodyID pending = p_object.get_pending_jolt_id();
+		JPH::Body *existing = physics_system->GetBodyLockInterfaceNoLock().TryGetBody(pending);
+		if (existing != nullptr) {
+			jolt_body = existing;
+			reused = true;
+		} else {
+			jolt_body = body_iface.CreateBodyWithID(pending, p_settings);
+		}
+	} else {
+		jolt_body = body_iface.CreateBody(p_settings);
+	}
+
+	// PlayFight diagnostic: surface the actual outcome of body creation for
+	// rollback-tagged bodies (those that came in with a pending Jolt ID hint).
+	// Skipped for auto-allocated bodies to avoid log spam from level statics.
+	if (had_pending) {
+		print_line(vformat("[add_object] pendingId=%d slot_added=%d reused=%d liveId=%d",
+				(int)pending_id,
+				(int)slot_already_added,
+				(int)reused,
+				jolt_body != nullptr ? (int)jolt_body->GetID().GetIndexAndSequenceNumber() : -1));
+	}
+
 	if (unlikely(jolt_body == nullptr)) {
 		ERR_PRINT_ONCE(vformat("Failed to create underlying Jolt Physics body for '%s'. "
 							   "Consider increasing maximum number of bodies in project settings. "
@@ -417,7 +453,21 @@ JPH::Body *JoltSpace3D::add_object(const JoltObject3D &p_object, const JPH::Body
 
 JPH::Body *JoltSpace3D::add_object(const JoltObject3D &p_object, const JPH::SoftBodyCreationSettings &p_settings, bool p_sleeping) {
 	JPH::BodyInterface &body_iface = get_body_iface();
-	JPH::Body *jolt_body = body_iface.CreateSoftBody(p_settings);
+
+	// PlayFight: same explicit-ID + reuse path as the rigid-body overload above.
+	JPH::Body *jolt_body = nullptr;
+	if (p_object.has_pending_jolt_id()) {
+		const JPH::BodyID pending = p_object.get_pending_jolt_id();
+		JPH::Body *existing = physics_system->GetBodyLockInterfaceNoLock().TryGetBody(pending);
+		if (existing != nullptr) {
+			jolt_body = existing;
+		} else {
+			jolt_body = body_iface.CreateSoftBodyWithID(pending, p_settings);
+		}
+	} else {
+		jolt_body = body_iface.CreateSoftBody(p_settings);
+	}
+
 	if (unlikely(jolt_body == nullptr)) {
 		ERR_PRINT_ONCE(vformat("Failed to create underlying Jolt Physics body for '%s'. "
 							   "Consider increasing maximum number of bodies in project settings. "
@@ -447,6 +497,41 @@ void JoltSpace3D::remove_object(const JPH::BodyID &p_jolt_id) {
 
 	// If we're never going to step this space, like in the editor viewport, we need to manually clean up Jolt's broad phase instead, otherwise performance can degrade when doing things like switching scenes.
 	// We'll never actually have zero bodies in any space though, since we always have the default area, so we check if there's one or fewer left instead.
+	if (!JoltPhysicsServer3D::get_singleton()->is_active() && physics_system->GetNumBodies() <= 1) {
+		physics_system->OptimizeBroadPhase();
+	}
+}
+
+void JoltSpace3D::remove_object_keep_alive(const JPH::BodyID &p_jolt_id) {
+	JPH::BodyInterface &body_iface = get_body_iface();
+
+	// PlayFight: remove from broad phase only. The body stays in BodyManager
+	// (slot stays reserved), so a later add_object with the same pending hint
+	// can reuse it instead of fighting Jolt's auto-allocator over the slot.
+	if (!pending_objects_sleeping.erase_unordered(p_jolt_id) && !pending_objects_awake.erase_unordered(p_jolt_id)) {
+		body_iface.RemoveBody(p_jolt_id);
+	}
+	// (Intentionally no DestroyBody. See comment above.)
+}
+
+void JoltSpace3D::destroy_body_in_manager(const JPH::BodyID &p_jolt_id) {
+	JPH::BodyInterface &body_iface = get_body_iface();
+
+	// PlayFight: final cleanup for rollback bodies that we kept alive across
+	// disable/enable cycles. Called from JoltPhysicsServer3D::free_body. We
+	// expect the body to already be out of the broad phase (remove_object_keep_alive
+	// was called via _remove_from_space first), but we go through the same
+	// safe path as remove_object just in case.
+	if (!pending_objects_sleeping.erase_unordered(p_jolt_id) && !pending_objects_awake.erase_unordered(p_jolt_id)) {
+		// Only call RemoveBody if it's still in broad phase, which TryGetBody can tell us.
+		const JPH::Body *body = physics_system->GetBodyLockInterfaceNoLock().TryGetBody(p_jolt_id);
+		if (body != nullptr && body->IsInBroadPhase()) {
+			body_iface.RemoveBody(p_jolt_id);
+		}
+	}
+
+	body_iface.DestroyBody(p_jolt_id);
+
 	if (!JoltPhysicsServer3D::get_singleton()->is_active() && physics_system->GetNumBodies() <= 1) {
 		physics_system->OptimizeBroadPhase();
 	}

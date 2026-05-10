@@ -36,10 +36,15 @@
 #include "joints/jolt_joint_3d.h"
 #include "joints/jolt_pin_joint_3d.h"
 #include "joints/jolt_slider_joint_3d.h"
+#include "misc/jolt_state_recorder.h"
 #include "objects/jolt_area_3d.h"
 #include "objects/jolt_body_3d.h"
 #include "objects/jolt_soft_body_3d.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
+
+#include "Jolt/Physics/Body/Body.h"
+#include "Jolt/Physics/Constraints/TwoBodyConstraint.h"
+#include "Jolt/Physics/PhysicsSystem.h"
 #include "shapes/jolt_box_shape_3d.h"
 #include "shapes/jolt_capsule_shape_3d.h"
 #include "shapes/jolt_concave_polygon_shape_3d.h"
@@ -1628,6 +1633,157 @@ void JoltPhysicsServer3D::step(real_t p_step) {
 	}
 }
 
+void JoltPhysicsServer3D::space_step(RID p_space, double p_delta) {
+	JoltSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL(space);
+	ERR_FAIL_NULL(job_system);
+
+	job_system->pre_step();
+	space->step((float)p_delta);
+	job_system->post_step();
+}
+
+namespace {
+// PlayFight: filter for the rollback StateRecorder. Only bodies whose Jolt
+// BodyID has been registered via `body_set_pending_jolt_id` make it into the
+// snapshot. This excludes everything we can't guarantee has matching IDs
+// across machines (auto-allocated bodies, statics, client-only debug nodes,
+// etc.) — only the explicitly-synced rollback set is shipped on the wire.
+//
+// Contacts and constraints follow the same rule: included only when both
+// bodies are members of the rollback set, otherwise the receiver couldn't
+// look up the partner body's ID anyway.
+class JoltPlayFightStateFilter : public JPH::StateRecorderFilter {
+	const HashSet<uint32_t> &rollback_set;
+
+public:
+	explicit JoltPlayFightStateFilter(const HashSet<uint32_t> &p_set) :
+			rollback_set(p_set) {}
+
+	bool _is_rollback(const JPH::BodyID &id) const {
+		return rollback_set.has(id.GetIndexAndSequenceNumber());
+	}
+
+	virtual bool ShouldSaveBody(const JPH::Body &inBody) const override {
+		return _is_rollback(inBody.GetID());
+	}
+	virtual bool ShouldSaveConstraint(const JPH::Constraint &inConstraint) const override {
+		// Use Jolt's own type tag instead of dynamic_cast — Godot is built
+		// without C++ RTTI. All ragdoll joints are TwoBodyConstraint, which
+		// is the only base type that exposes its body refs through a stable
+		// API. Anything else (vehicle constraints, etc.) we conservatively
+		// drop because we can't verify both bodies are in the rollback set.
+		if (inConstraint.GetType() != JPH::EConstraintType::TwoBodyConstraint) {
+			return false;
+		}
+		const JPH::TwoBodyConstraint &two_body = static_cast<const JPH::TwoBodyConstraint &>(inConstraint);
+		const JPH::Body *b1 = two_body.GetBody1();
+		const JPH::Body *b2 = two_body.GetBody2();
+		if (b1 == nullptr || b2 == nullptr) {
+			return false;
+		}
+		return _is_rollback(b1->GetID()) && _is_rollback(b2->GetID());
+	}
+	virtual bool ShouldSaveContact(const JPH::BodyID &b1, const JPH::BodyID &b2) const override {
+		return _is_rollback(b1) && _is_rollback(b2);
+	}
+	virtual bool ShouldRestoreContact(const JPH::BodyID &b1, const JPH::BodyID &b2) const override {
+		return _is_rollback(b1) && _is_rollback(b2);
+	}
+};
+} // namespace
+
+PackedByteArray JoltPhysicsServer3D::space_save_state(RID p_space) {
+	JoltSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, PackedByteArray());
+
+	JoltStateRecorder recorder;
+	JoltPlayFightStateFilter filter(rollback_body_ids);
+	space->get_physics_system().SaveState(recorder, JPH::EStateRecorderState::All, &filter);
+	return recorder.to_packed_byte_array();
+}
+
+bool JoltPhysicsServer3D::space_restore_state(RID p_space, const PackedByteArray &p_state) {
+	JoltSpace3D *space = space_owner.get_or_null(p_space);
+	ERR_FAIL_NULL_V(space, false);
+	ERR_FAIL_COND_V(p_state.is_empty(), false);
+
+	JoltStateRecorder recorder(p_state);
+	JoltPlayFightStateFilter filter(rollback_body_ids);
+	bool ok = space->get_physics_system().RestoreState(recorder, &filter);
+	if (!ok || recorder.IsFailed()) {
+		ERR_PRINT("JoltPhysicsServer3D::space_restore_state failed to restore physics state.");
+		return false;
+	}
+	return true;
+}
+
+void JoltPhysicsServer3D::body_set_pending_jolt_id(RID p_body, uint64_t p_jolt_id) {
+	uint32_t jolt_id_u32 = (uint32_t)p_jolt_id;
+
+	JoltBody3D *body = body_owner.get_or_null(p_body);
+	if (body == nullptr) {
+		// Try area / soft body owners — body_set_pending is meaningful for any
+		// JoltObject3D subclass so we look up across the whole object space.
+		JoltArea3D *area = area_owner.get_or_null(p_body);
+		if (area != nullptr) {
+			area->set_pending_jolt_id(JPH::BodyID(jolt_id_u32));
+			rollback_body_ids.insert(jolt_id_u32);
+			return;
+		}
+		JoltSoftBody3D *soft = soft_body_owner.get_or_null(p_body);
+		if (soft != nullptr) {
+			soft->set_pending_jolt_id(JPH::BodyID(jolt_id_u32));
+			rollback_body_ids.insert(jolt_id_u32);
+			return;
+		}
+		ERR_FAIL_MSG("body_set_pending_jolt_id: RID does not refer to a body / area / soft body.");
+	}
+
+	if (body->in_space()) {
+		WARN_PRINT("body_set_pending_jolt_id: body is already in a physics space; the hint is set but will not take effect until the body re-enters a space.");
+	}
+	body->set_pending_jolt_id(JPH::BodyID(jolt_id_u32));
+	// Register membership in the rollback set so SaveState/RestoreState include it.
+	rollback_body_ids.insert(jolt_id_u32);
+
+	// PlayFight diagnostic: confirm the engine call actually landed on this
+	// instance and the set is growing. Emits ad-hoc output that the game-side
+	// can correlate with its own per-bone print.
+	print_line(vformat("[rollback] inserted jolt_id=%d in_space=%d set_size=%d",
+			(int)jolt_id_u32, body->in_space() ? 1 : 0, (int)rollback_body_ids.size()));
+}
+
+uint64_t JoltPhysicsServer3D::body_get_jolt_id(RID p_body) const {
+	const JoltBody3D *body = body_owner.get_or_null(p_body);
+	if (body != nullptr) {
+		if (!body->in_space()) {
+			// Return the pending hint if not yet in a space, otherwise the live ID.
+			return body->has_pending_jolt_id() ? body->get_pending_jolt_id().GetIndexAndSequenceNumber() : 0xFFFFFFFFu;
+		}
+		return body->get_jolt_id().GetIndexAndSequenceNumber();
+	}
+	const JoltArea3D *area = area_owner.get_or_null(p_body);
+	if (area != nullptr && area->in_space()) {
+		return area->get_jolt_id().GetIndexAndSequenceNumber();
+	}
+	const JoltSoftBody3D *soft = soft_body_owner.get_or_null(p_body);
+	if (soft != nullptr && soft->in_space()) {
+		return soft->get_jolt_id().GetIndexAndSequenceNumber();
+	}
+	return 0xFFFFFFFFu;
+}
+
+void JoltPhysicsServer3D::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("space_step", "space", "delta"), &JoltPhysicsServer3D::space_step);
+	ClassDB::bind_method(D_METHOD("space_save_state", "space"), &JoltPhysicsServer3D::space_save_state);
+	ClassDB::bind_method(D_METHOD("space_restore_state", "space", "state"), &JoltPhysicsServer3D::space_restore_state);
+	ClassDB::bind_method(D_METHOD("body_set_pending_jolt_id", "body", "jolt_id"), &JoltPhysicsServer3D::body_set_pending_jolt_id);
+	ClassDB::bind_method(D_METHOD("body_get_jolt_id", "body"), &JoltPhysicsServer3D::body_get_jolt_id);
+	ClassDB::bind_method(D_METHOD("rollback_set_size"), &JoltPhysicsServer3D::rollback_set_size);
+	ClassDB::bind_method(D_METHOD("rollback_set_has", "jolt_id"), &JoltPhysicsServer3D::rollback_set_has);
+}
+
 void JoltPhysicsServer3D::sync() {
 	doing_sync = true;
 }
@@ -1682,7 +1838,30 @@ void JoltPhysicsServer3D::free_area(JoltArea3D *p_area) {
 void JoltPhysicsServer3D::free_body(JoltBody3D *p_body) {
 	ERR_FAIL_NULL(p_body);
 
-	p_body->set_space(nullptr);
+	// PlayFight: rollback bodies are kept alive in BodyManager across disable
+	// cycles (see _remove_from_space). Drop them from the rollback set and
+	// remember the explicit ID for the final destroy after set_space(nullptr).
+	const bool was_rollback = p_body->has_pending_jolt_id();
+	JPH::BodyID id_for_final_destroy;
+	if (was_rollback) {
+		id_for_final_destroy = p_body->get_pending_jolt_id();
+		rollback_body_ids.erase(id_for_final_destroy.GetIndexAndSequenceNumber());
+	} else if (p_body->in_space()) {
+		rollback_body_ids.erase(p_body->get_jolt_id().GetIndexAndSequenceNumber());
+	}
+
+	p_body->set_space(nullptr); // For rollback bodies: removes from broad phase only.
+
+	// After set_space(nullptr), get_space() is null but get_kept_alive_space()
+	// points at the JoltSpace3D whose BodyManager still holds the body.
+	if (was_rollback) {
+		JoltSpace3D *space_for_final_destroy = p_body->get_kept_alive_space();
+		if (space_for_final_destroy != nullptr) {
+			space_for_final_destroy->destroy_body_in_manager(id_for_final_destroy);
+			p_body->set_kept_alive_space(nullptr);
+		}
+	}
+
 	body_owner.free(p_body->get_rid());
 	memdelete(p_body);
 }
@@ -1690,7 +1869,25 @@ void JoltPhysicsServer3D::free_body(JoltBody3D *p_body) {
 void JoltPhysicsServer3D::free_soft_body(JoltSoftBody3D *p_body) {
 	ERR_FAIL_NULL(p_body);
 
+	const bool was_rollback = p_body->has_pending_jolt_id();
+	JPH::BodyID id_for_final_destroy;
+	if (was_rollback) {
+		id_for_final_destroy = p_body->get_pending_jolt_id();
+		rollback_body_ids.erase(id_for_final_destroy.GetIndexAndSequenceNumber());
+	} else if (p_body->in_space()) {
+		rollback_body_ids.erase(p_body->get_jolt_id().GetIndexAndSequenceNumber());
+	}
+
 	p_body->set_space(nullptr);
+
+	if (was_rollback) {
+		JoltSpace3D *space_for_final_destroy = p_body->get_kept_alive_space();
+		if (space_for_final_destroy != nullptr) {
+			space_for_final_destroy->destroy_body_in_manager(id_for_final_destroy);
+			p_body->set_kept_alive_space(nullptr);
+		}
+	}
+
 	soft_body_owner.free(p_body->get_rid());
 	memdelete(p_body);
 }
